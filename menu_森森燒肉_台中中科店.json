@@ -1,0 +1,329 @@
+{
+  "name": "森森燒肉 台中中科店",
+  "menu_items": [
+    {
+      "name": "Smoked Beef Short Ribs (原木煙燻牛小排)",
+      "price": ""
+    },
+    {
+      "name": "A5 Japanese Wagyu Lace Meat (A5日本極和牛 霜降蕾絲)",
+      "price": ""
+    },
+    {
+      "name": "A5 Japanese Wagyu Lace Meat-Plaid (A5日本極和牛 蕾絲格紋)",
+      "price": ""
+    },
+    {
+      "name": "A5 Japanese Wagyu Snowflake (A5日本雪花和牛)",
+      "price": ""
+    },
+    {
+      "name": "A5 Japanese Wagyu Marbled Meat (A5日本和牛霜雨一品)",
+      "price": ""
+    },
+    {
+      "name": "Prime Chuck Short Ribs (Prime霜降牛小排)",
+      "price": ""
+    },
+    {
+      "name": "Prime Beef Tongue With Salt & Scallion (鹽蔥極品牛舌)",
+      "price": ""
+    },
+    {
+      "name": "Thick Cut Beef Tongue With Salt & Scallion (升級 鹽蔥極品厚切牛舌)",
+      "price": "$399.00"
+    },
+    {
+      "name": "Red Miso Beef (赤味噌中腹)",
+      "price": ""
+    },
+    {
+      "name": "Seasonal Seafood (嚴選時令海鮮)",
+      "price": ""
+    },
+    {
+      "name": "Popular Seafood Combo (人氣海鮮組合)",
+      "price": "$339.00"
+    },
+    {
+      "name": "Premium Seafood Double Layer (森式雙層海鮮)",
+      "price": "$899.00"
+    },
+    {
+      "name": "Cheese Pineapple Flatbread (芝心起司鳳梨薄餅)",
+      "price": "$169.00"
+    },
+    {
+      "name": "Mochi Cheese Flatbread (白玉麻糬起司薄餅)",
+      "price": "$189.00"
+    },
+    {
+      "name": "Mentaiko Cheese Flatbread (和風明太子起司薄餅)",
+      "price": "$189.00"
+    },
+    {
+      "name": "Salmon Bibimbap With Egg (玉子鮭魚石鍋飯)",
+      "price": "$149.00"
+    },
+    {
+      "name": "Seafood Congee (海鮮石鍋粥)",
+      "price": "$269.00"
+    },
+    {
+      "name": "挪威薄鹽鯖魚/隻 (Norwegian Salted Mackerel)",
+      "price": "$188.00"
+    },
+    {
+      "name": "柳葉魚 8隻 (Spirinchus Lanceolatus)",
+      "price": "$248.00"
+    },
+    {
+      "name": "智利鮭魚菲力/份 (Chilean Salmon Filet)",
+      "price": "$358.00"
+    },
+    {
+      "name": "紋甲花枝/份 (Tattooed Flower Branch)",
+      "price": "$318.00"
+    },
+    {
+      "name": "根島履歷海草蝦/隻 (Black Tiger Shrimp)",
+      "price": "$158.00"
+    },
+    {
+      "name": "野生海虎蝦/隻 (Wild Black Tiger Shrimp)",
+      "price": "$419.00"
+    },
+    {
+      "name": "北海道生食級大干貝/顆 (Hokkaido Sashimi Grade Giant Scallops)",
+      "price": "$268.00"
+    },
+    {
+      "name": "森式雙層海鮮 (Premium Seafood Double Layer)",
+      "price": "$1,068.00"
+    },
+    {
+      "name": "Prime玫瑰霜降牛小排 (Prime Rose Short Rib)",
+      "price": ""
+    },
+    {
+      "name": "原木煙燻牛小排 (Smoked Beef Short Ribs)",
+      "price": ""
+    },
+    {
+      "name": "Prime霜降牛小排 (Prime Chuck Short Ribs)",
+      "price": ""
+    },
+    {
+      "name": "韓式厚燒帶骨豚肩排 (Korean Style Bone-In Boston Butt)",
+      "price": ""
+    },
+    {
+      "name": "蒜香霜降松阪豚 (Pork Neck)",
+      "price": ""
+    },
+    {
+      "name": "醬燒豚肩肉 (Pork Shoulder)",
+      "price": ""
+    },
+    {
+      "name": "嚴選雞腿肉 (Chicken Thigh)",
+      "price": ""
+    },
+    {
+      "name": "挪威薄鹽鯖魚/份 (Norwegian Salted Mackerel)",
+      "price": ""
+    },
+    {
+      "name": "歐式奶油蒜香鮑魚/顆 (Garlic Butter Abalone)",
+      "price": ""
+    },
+    {
+      "name": "酒蒸海鮮石鍋燒 (Sake-Steamed Seafood Stone Pot)",
+      "price": "$99.00"
+    },
+    {
+      "name": "芝心起司鳳梨薄餅 (Cheese Pineapple Flatbread)",
+      "price": ""
+    },
+    {
+      "name": "玉子鮭魚石鍋飯 (Salmon Bibimbap With Egg)",
+      "price": "$149.00"
+    },
+    {
+      "name": "海鮮石鍋粥 (Seafood Congee)",
+      "price": "$269.00"
+    },
+    {
+      "name": "水耕時蔬沙拉",
+      "price": ""
+    },
+    {
+      "name": "法式甜點",
+      "price": ""
+    },
+    {
+      "name": "精選熟食湯品",
+      "price": ""
+    },
+    {
+      "name": "飲料",
+      "price": ""
+    },
+    {
+      "name": "根島生態蝦",
+      "price": ""
+    },
+    {
+      "name": "可爾必思沙瓦",
+      "price": ""
+    },
+    {
+      "name": "芒果可爾必思沙瓦",
+      "price": ""
+    },
+    {
+      "name": "水蜜桃可爾必思沙瓦",
+      "price": ""
+    },
+    {
+      "name": "Jungle鳳梨可樂達",
+      "price": ""
+    },
+    {
+      "name": "Mojito莫西多蘇打",
+      "price": ""
+    },
+    {
+      "name": "Pink Lady粉紅佳人",
+      "price": ""
+    },
+    {
+      "name": "Caipiroska卡比羅斯卡",
+      "price": ""
+    },
+    {
+      "name": "Asahi白啤酒",
+      "price": ""
+    },
+    {
+      "name": "法國可倫堡1664原味啤酒",
+      "price": ""
+    },
+    {
+      "name": "法國可倫堡1664白啤酒",
+      "price": ""
+    },
+    {
+      "name": "台灣金牌啤酒",
+      "price": ""
+    },
+    {
+      "name": "日本角嗨",
+      "price": ""
+    },
+    {
+      "name": "金賓Highball",
+      "price": ""
+    },
+    {
+      "name": "鬼殺清酒",
+      "price": ""
+    },
+    {
+      "name": "A5日本和牛霜雨一品 (Wagyu Marbled Meat)",
+      "price": "$818.00"
+    },
+    {
+      "name": "A5日本極和牛 霜降蕾絲 (Wagyu Lace Meat)",
+      "price": "$918.00"
+    },
+    {
+      "name": "Prime霜降牛小排切厚切 (Prime Chuck Short Ribs)",
+      "price": "$488.00"
+    },
+    {
+      "name": "果香壺漬牛小排 (Fruity Pickled Beef)",
+      "price": "$438.00"
+    },
+    {
+      "name": "橘香牛角切 (Beef Steak With Pomelo Sauce)",
+      "price": "$398.00"
+    },
+    {
+      "name": "赤味噌中腹 (Red Miso Beef)",
+      "price": "$228.00"
+    },
+    {
+      "name": "醬燒牛後腹 (Short Plate)",
+      "price": "$248.00"
+    },
+    {
+      "name": "鹽蔥牛後腹 (Karubi With Salt & Scallion)",
+      "price": "$268.00"
+    },
+    {
+      "name": "醬燒牛腹肉 (Karubi)",
+      "price": "$258.00"
+    },
+    {
+      "name": "鹽蔥牛腹肉 (Karubi With Salt & Scallion)",
+      "price": "$278.00"
+    },
+    {
+      "name": "森森辣辣椒 (Special Chili)",
+      "price": ""
+    },
+    {
+      "name": "特調鹽蔥 (Chef's Salt & Scallion)",
+      "price": ""
+    },
+    {
+      "name": "黑松露醬 (Black Truffle Sauce)",
+      "price": "$180.00"
+    },
+    {
+      "name": "玉米 (Corn)",
+      "price": "$90.00"
+    },
+    {
+      "name": "青椒 (Green Pepper)",
+      "price": "$90.00"
+    },
+    {
+      "name": "香菇 (Mushroom)",
+      "price": "$90.00"
+    },
+    {
+      "name": "杏鮑菇 (King Oyster Mushroom)",
+      "price": "$90.00"
+    },
+    {
+      "name": "帶皮玉米筍 (Baby Corn)",
+      "price": "$100.00"
+    },
+    {
+      "name": "櫛瓜 (Zucchini)",
+      "price": "$100.00"
+    },
+    {
+      "name": "山藥 (Japanese Yam)",
+      "price": "$130.00"
+    },
+    {
+      "name": "綜合野菜 (Vegetables Combo)",
+      "price": "$220.00"
+    },
+    {
+      "name": "普切塔",
+      "price": ""
+    },
+    {
+      "name": "烤海鮮沙拉",
+      "price": ""
+    },
+    {
+      "name": "雞腿水果莎莎",
+      "price": ""
+    }
+  ]
+}

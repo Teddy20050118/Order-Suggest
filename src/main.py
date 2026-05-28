@@ -4,7 +4,13 @@ import os, json, re, shutil, subprocess, random, time
 from typing import Dict, List, Optional, TypedDict, Literal, Tuple
 
 
-DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3:12b")
+DEFAULT_MODEL = (
+    os.environ.get("API_MODEL")
+    or os.environ.get("AI_MODEL")
+    or os.environ.get("MODEL")
+    or os.environ.get("OLLAMA_MODEL")
+    or "gemma3:12b"
+)
 OLLAMA_BIN = os.getenv("OLLAMA_BIN", "ollama")
 
 def _cli_available() -> bool:
@@ -186,7 +192,7 @@ def extract_prefs_with_llm(text: str) -> Preferences:
         from ollama_fuc import chat
         
         # 使用更小更快的模型（llama3.1 或 gemma3）
-        model = os.environ.get("PREF_MODEL", "gemma3:latest")
+        model = os.environ.get("PREF_MODEL") or DEFAULT_MODEL
         
         prompt = f"""請分析使用者訊息，提取點餐偏好。只回傳 JSON 格式，不要其他文字。
 
@@ -575,6 +581,31 @@ def _build_recommendation_prompt(rec: Dict[str, object], user_input: str) -> str
 
     items_json = json.dumps(items, ensure_ascii=False, indent=2)
 
+    return f"""你是熟悉餐廳菜單的真人點餐顧問。請根據使用者需求與候選餐點，用自然、像朋友或店員建議的方式回答。
+
+使用者原始需求：
+{user_input}
+
+候選餐點 JSON：
+{items_json}
+
+目前估算：
+- 人數：{people or "未指定"}
+- 預算：{f"NT${int(budget)}" if budget else "未指定"}
+- 是否需要飲料：{"需要" if need_drink else "未特別需要"}
+- 小計：NT${subtotal:.0f}
+- 服務費估算：NT${service:.0f}
+- 合計估算：NT${total:.0f}
+
+回答要求：
+- 不要用固定模板、表格、制式標題或「以下是推薦」這種 AI 感開場。
+- 用 1 到 3 段自然中文回答，像真的在幫朋友點餐。
+- 可以保留少量品項名稱與價格，但不要把資料機械列出。
+- 先講最推薦怎麼點，再自然補充為什麼適合他的預算、口味或人數。
+- 如果有預算，請自然提到大概會不會超出。
+- 如果資料不足或價格缺失，要誠實說明，不要編造。
+"""
+
     return f"""你是一位親切的台灣中文點餐助理。請根據以下推薦清單，用自然、有溫度的繁體中文回覆使用者。
 
 【使用者需求】
@@ -616,7 +647,7 @@ def generate_ai_reply(
     """
     from ollama_fuc import chat as _ollama_chat
 
-    mdl    = model or os.environ.get("OLLAMA_MODEL", "gemma3:12b")
+    mdl    = model or DEFAULT_MODEL
     prompt = _build_recommendation_prompt(rec, user_input)
 
     try:

@@ -3,9 +3,21 @@ __pycache__/
 *.pyc
 *.pyo
 
+# Local virtual environments
+.venv/
+.venv-win/
+env/
+venv/
+
 # Logs
 logs/*.jsonl
 logs/*.log
 
+# Local secrets
+.env
+
 # Playwright downloads
 playwright/.local-browsers/
+
+# Local Chrome profile used by crawler CDP session
+.chrome_debug_profile/

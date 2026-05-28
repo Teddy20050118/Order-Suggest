@@ -10,13 +10,17 @@
 """
 
 import asyncio
+import base64
 import json
 import sys
 import subprocess
 import time
 import socket
+import re
 from dataclasses import dataclass, asdict
 from pathlib import Path
+from typing import Any, Dict, List
+from urllib.parse import quote_plus
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 
 # ============================================================================
@@ -41,6 +45,7 @@ class Config:
     WAIT_DATA_CHECK = 500
     MAX_CHECK_ATTEMPTS = 10
     CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+    ENABLE_MANUAL_ASSIST = False
 
 # ============================================================================
 # 資料結構
@@ -55,6 +60,7 @@ class MenuItem:
 class Restaurant:
     name: str
     menu_items: list = None
+    error: str = ""
 
 # ============================================================================
 # 輔助函數
@@ -80,14 +86,14 @@ def start_chrome_debug_mode():
         return True
     
     try:
-        # 使用 user-data-dir 來啟動獨立的 Chrome 實例
-        import tempfile
-        user_data_dir = tempfile.mkdtemp(prefix='chrome_debug_')
+        # Use a stable profile so manual Google verification can persist across retries.
+        user_data_dir = Path(__file__).resolve().parent / ".chrome_debug_profile"
+        user_data_dir.mkdir(exist_ok=True)
         
         chrome_cmd = [
             Config.CHROME_PATH,
             f"--remote-debugging-port={Config.CDP_PORT}",
-            f"--user-data-dir={user_data_dir}",
+            f"--user-data-dir={str(user_data_dir)}",
             "--no-first-run",
             "--no-default-browser-check"
         ]
@@ -306,6 +312,455 @@ async def extract_menu_data(page, restaurant_name: str) -> Restaurant:
         traceback.print_exc()
         return Restaurant(name=restaurant_name, menu_items=[])
 
+
+def _extract_json_object(text: str) -> Any:
+    """Extract a JSON object from model output."""
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        try:
+            return json.loads(text[start:end + 1])
+        except Exception:
+            return None
+    return None
+
+
+def _normalize_vision_menu_items(raw_items: Any) -> List[MenuItem]:
+    """Convert model JSON into crawler MenuItem objects."""
+    if not isinstance(raw_items, list):
+        return []
+
+    def clean_price(value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return "價格未標示"
+        if "未" in text or "時價" in text:
+            return "價格未標示"
+        match = re.search(r"\$?\s*(\d{2,5})(?:\.0+)?", text.replace(",", ""))
+        if match:
+            return match.group(1)
+        return text
+
+    items: List[MenuItem] = []
+    seen = set()
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name") or raw.get("dish") or "").strip()
+        if len(name) < 2 or name in seen:
+            continue
+        price = clean_price(raw.get("price") or raw.get("amount"))
+        items.append(MenuItem(name=name, price=price))
+        seen.add(name)
+    return items
+
+
+MIN_VISION_MENU_ITEMS = 8
+
+
+class GoogleVerificationRequired(RuntimeError):
+    """Google asked for human verification; do not continue automation."""
+
+
+def is_usable_menu_result(items: List[MenuItem]) -> bool:
+    return len(items) >= MIN_VISION_MENU_ITEMS
+
+
+async def is_google_verification_page(page) -> bool:
+    url = (page.url or "").lower()
+    if any(marker in url for marker in ("google.com/sorry", "captcha", "recaptcha")):
+        return True
+
+    try:
+        body_text = (await page.locator("body").inner_text(timeout=2000)).lower()
+    except Exception:
+        body_text = ""
+
+    verification_markers = (
+        "unusual traffic",
+        "captcha",
+        "recaptcha",
+        "not a robot",
+        "verify you are human",
+        "人機驗證",
+        "驗證",
+        "確認你不是機器人",
+    )
+    return any(marker in body_text for marker in verification_markers)
+
+
+async def stop_if_google_verification(page):
+    if await is_google_verification_page(page):
+        raise GoogleVerificationRequired(
+            "Google 要求人機驗證，請在 Chrome 完成驗證後重新爬取。"
+        )
+
+
+async def open_google_image_preview(page, candidate: Dict[str, Any]) -> str:
+    """Click a Google Images result and return the largest preview image URL."""
+    index = candidate.get("index")
+    if not isinstance(index, int):
+        return ""
+
+    try:
+        try:
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(200)
+        except Exception:
+            pass
+        images = page.locator("img")
+        if index >= await images.count():
+            return ""
+        await images.nth(index).scroll_into_view_if_needed(timeout=3000)
+        await images.nth(index).click(timeout=5000)
+        await page.wait_for_timeout(1200)
+        return await page.evaluate(
+            """() => {
+                const imgs = Array.from(document.images).map((img) => {
+                    const rect = img.getBoundingClientRect();
+                    const url = img.currentSrc || img.src || img.getAttribute('data-src') || '';
+                    return {
+                        url,
+                        width: img.naturalWidth || img.width || rect.width || 0,
+                        height: img.naturalHeight || img.height || rect.height || 0,
+                        renderedWidth: rect.width || 0,
+                        renderedHeight: rect.height || 0
+                    };
+                }).filter((item) =>
+                    item.url.startsWith('http') &&
+                    item.renderedWidth >= 250 &&
+                    item.renderedHeight >= 160
+                );
+                imgs.sort((a, b) =>
+                    (b.width * b.height + b.renderedWidth * b.renderedHeight) -
+                    (a.width * a.height + a.renderedWidth * a.renderedHeight)
+                );
+                return imgs[0] ? imgs[0].url : '';
+            }"""
+        )
+    except Exception as e:
+        print(f"  [WARN] 無法開啟圖片預覽: {e}")
+        return ""
+
+
+async def find_menu_image_candidates(page, restaurant_name: str) -> List[Dict[str, Any]]:
+    """Search Google Images for menu-like image URLs."""
+    print("\n" + "=" * 70)
+    print("[Fallback] 搜尋菜單圖片")
+    print("=" * 70)
+
+    queries = [
+        f"{restaurant_name} photos",
+        f"{restaurant_name} 菜單",
+        f"{restaurant_name} 價格",
+    ]
+    keywords = ("菜單", "menu", "價目表", "餐牌", "價格", "price", "相片", "photo")
+    candidates: List[Dict[str, Any]] = []
+    seen_urls = set()
+
+    for query in queries:
+        search_url = f"https://www.google.com/search?tbm=isch&q={quote_plus(query)}"
+        print(f"  => {search_url}")
+        try:
+            await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(2500)
+            await stop_if_google_verification(page)
+        except GoogleVerificationRequired:
+            raise
+        except Exception as e:
+            print(f"  [WARN] 圖片搜尋失敗: {e}")
+            continue
+
+        try:
+            page_candidates = await page.evaluate(
+                """() => {
+                    const originalUrl = (el) => {
+                        const a = el.closest('a');
+                        const href = a ? a.href || '' : '';
+                        if (!href) return '';
+                        try {
+                            const parsed = new URL(href);
+                            return parsed.searchParams.get('imgurl') ||
+                                   parsed.searchParams.get('mediaurl') ||
+                                   parsed.searchParams.get('url') ||
+                                   '';
+                        } catch {
+                            return '';
+                        }
+                    };
+                    const cardText = (img) => {
+                        const card = img.closest('div[data-ri], div[jscontroller], a, div') || img.parentElement;
+                        return [
+                            img.alt || '',
+                            img.title || '',
+                            img.getAttribute('aria-label') || '',
+                            card ? card.innerText || '' : '',
+                            card ? card.getAttribute('aria-label') || '' : ''
+                        ].join(' ');
+                    };
+                    return Array.from(document.images).map((img, index) => {
+                        const rect = img.getBoundingClientRect();
+                        return {
+                            url: originalUrl(img) || img.currentSrc || img.src || img.getAttribute('data-src') || '',
+                            text: cardText(img),
+                            width: img.naturalWidth || img.width || Math.round(rect.width) || 0,
+                            height: img.naturalHeight || img.height || Math.round(rect.height) || 0,
+                            renderedWidth: Math.round(rect.width),
+                            renderedHeight: Math.round(rect.height),
+                            left: Math.round(rect.left),
+                            top: Math.round(rect.top),
+                            index
+                        };
+                    }).filter((item) =>
+                        item.url.startsWith('http') &&
+                        item.renderedWidth >= 80 &&
+                        item.renderedHeight >= 60
+                    );
+                }"""
+            )
+        except Exception as e:
+            print(f"  [WARN] 無法擷取圖片候選: {e}")
+            continue
+
+        query_candidates: List[Dict[str, Any]] = []
+        for item in page_candidates:
+            url = str(item.get("url", ""))
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            text = str(item.get("text", ""))
+            score = 0
+            lower_text = text.lower()
+            lower_url = url.lower()
+            if any(k.lower() in lower_text for k in keywords):
+                score += 5
+            if any(k.lower() in lower_url for k in keywords):
+                score += 2
+            if "facebook" in lower_text or "facebook" in lower_url:
+                score += 3
+            rendered_width = int(item.get("renderedWidth", 0) or 0)
+            rendered_height = int(item.get("renderedHeight", 0) or 0)
+            natural_width = int(item.get("width", 0) or 0)
+            natural_height = int(item.get("height", 0) or 0)
+            aspect = (rendered_width or natural_width or 1) / max(rendered_height or natural_height or 1, 1)
+            if rendered_width >= 240 and rendered_height >= 150:
+                score += 3
+            if 1.2 <= aspect <= 2.6:
+                score += 2
+            if int(item.get("top", 9999) or 9999) < 700:
+                score += 2
+            score += min(natural_width // 500, 3)
+            score += min(natural_height // 400, 3)
+            candidate = {
+                "url": url,
+                "text": text[:300],
+                "score": score,
+                "width": natural_width,
+                "height": natural_height,
+                "index": item.get("index"),
+            }
+            candidates.append(candidate)
+            query_candidates.append(candidate)
+
+        for candidate in sorted(query_candidates, key=lambda x: x.get("score", 0), reverse=True)[:5]:
+            large_url = await open_google_image_preview(page, candidate)
+            if large_url and large_url not in seen_urls:
+                seen_urls.add(large_url)
+                enriched = dict(candidate)
+                enriched["url"] = large_url
+                enriched["score"] = int(enriched.get("score", 0)) + 6
+                candidates.append(enriched)
+
+    candidates.sort(key=lambda x: x.get("score", 0), reverse=True)
+    print(f"  [INFO] 找到 {len(candidates)} 張候選圖片")
+    return candidates
+
+
+def verify_menu_items_with_vision(
+    vision_chat_func,
+    base_prompt: str,
+    image_url: str,
+    restaurant_name: str,
+    items: List[MenuItem],
+) -> List[MenuItem]:
+    """Ask the vision model to verify names/prices against the same image."""
+    draft = {
+        "menu_items": [
+            {"name": item.name, "price": item.price}
+            for item in items
+        ]
+    }
+    verify_prompt = f"""{base_prompt}
+
+Now verify this draft against the same image:
+{json.dumps(draft, ensure_ascii=False)}
+
+Fix wrong item names, wrong prices, and missing visible items.
+Especially check prices carefully: do not output $300 for an item whose printed price is $230 or $330.
+Handwritten or temporary marks such as blue X marks, red strike-throughs, circles, stickers, or pen marks must not remove a printed menu item.
+Return the corrected strict JSON only.
+"""
+    try:
+        response = vision_chat_func(verify_prompt, image_url=image_url, timeout=180.0)
+        parsed = _extract_json_object(response)
+        if not isinstance(parsed, dict):
+            return items
+        verified = _normalize_vision_menu_items(parsed.get("menu_items"))
+        return verified or items
+    except Exception as e:
+        print(f"  [Vision] 二次校對失敗，保留第一輪結果: {e}")
+        return items
+
+
+async def parse_menu_from_search_screenshots(page, restaurant_name: str, vision_chat_func) -> Restaurant:
+    """Fallback: let the vision model inspect Google Images result screenshots directly."""
+    print("\n[Fallback] 直接分析 Google 圖片搜尋結果畫面")
+    queries = [
+        f"{restaurant_name} photos",
+        f"{restaurant_name} 菜單",
+        f"{restaurant_name} 價格",
+    ]
+
+    prompt = f"""This image is a screenshot of Google Images search results for "{restaurant_name}".
+Your task is to find any visible restaurant menu image within the screenshot and extract menu items from that visible menu image.
+
+Return strict JSON only:
+{{"menu_items":[{{"name":"exact Chinese item name","price":"integer price only, e.g. 120"}}]}}
+
+How to decide which visible image is the menu:
+- It may look like a printed price board, menu board, red/black table, dense text grid, or a photo of a menu page.
+- It may come from Facebook, Google reviews, blog posts, or restaurant photos.
+- It does NOT need to have the word "菜單" or "menu" near it.
+- Ignore storefront photos, food photos, logos, interiors, people photos, UberEats/Foodpanda product cards, and single-dish product photos unless a full menu with many item names and prices is readable.
+
+Extraction rules:
+- Extract only from the visible menu image in the screenshot.
+- Use printed item names and nearby printed prices.
+- Handwritten or temporary marks can mean sold out that day; do not remove printed items because of them.
+- Return only digits for prices; if unreadable use "價格未標示".
+- If fewer than 8 readable menu items are visible, return {{"menu_items":[]}}.
+- If no readable menu image is visible, return {{"menu_items":[]}}.
+"""
+
+    for query in queries:
+        search_url = f"https://www.google.com/search?tbm=isch&q={quote_plus(query)}"
+        print(f"  [Screenshot] {search_url}")
+        try:
+            await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(2500)
+            await stop_if_google_verification(page)
+            visible_count = await page.evaluate(
+                """() => Array.from(document.images).filter((img) => {
+                    const rect = img.getBoundingClientRect();
+                    return rect.width >= 80 && rect.height >= 60;
+                }).length"""
+            )
+            if visible_count < MIN_VISION_MENU_ITEMS:
+                print(f"  [Screenshot] 可見圖片只有 {visible_count} 張，略過這個 query")
+                continue
+            try:
+                await page.evaluate("window.scrollTo(0, 0)")
+            except Exception:
+                pass
+            png = await page.screenshot(type="png", full_page=False)
+            data_url = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+            response = vision_chat_func(prompt, image_url=data_url, timeout=180.0)
+            parsed = _extract_json_object(response)
+            if not isinstance(parsed, dict):
+                continue
+            items = _normalize_vision_menu_items(parsed.get("menu_items"))
+            if is_usable_menu_result(items):
+                print(f"  [Screenshot Vision] 成功從搜尋結果畫面解析 {len(items)} 道菜")
+                return Restaurant(name=restaurant_name, menu_items=items)
+            if items:
+                print(
+                    f"  [Screenshot Vision] 只解析到 {len(items)} 道菜，低於 {MIN_VISION_MENU_ITEMS} 項門檻，繼續嘗試"
+                )
+        except GoogleVerificationRequired:
+            raise
+        except Exception as e:
+            print(f"  [Screenshot Vision] 解析失敗: {e}")
+
+    return Restaurant(name=restaurant_name, menu_items=[])
+
+
+async def parse_menu_from_images(page, restaurant_name: str) -> Restaurant:
+    """Fallback: find menu images and parse them with the configured vision model."""
+    try:
+        src_dir = Path(__file__).resolve().parent / "src"
+        if src_dir.exists() and str(src_dir) not in sys.path:
+            sys.path.insert(0, str(src_dir))
+        from ollama_fuc import vision_chat
+    except Exception as e:
+        print(f"  [ERROR] 無法匯入 vision_chat: {e}")
+        return Restaurant(name=restaurant_name, menu_items=[])
+
+    screenshot_result = await parse_menu_from_search_screenshots(page, restaurant_name, vision_chat)
+    if screenshot_result.menu_items:
+        return screenshot_result
+
+    candidates = await find_menu_image_candidates(page, restaurant_name)
+    if not candidates:
+        return Restaurant(name=restaurant_name, menu_items=[])
+
+    prompt = f"""You are doing high-precision OCR transcription of a restaurant menu image for "{restaurant_name}".
+Return strict JSON only, no markdown and no explanation.
+Schema:
+{{"menu_items":[{{"name":"exact Chinese item name","price":"integer price only, e.g. 330"}}]}}
+
+Critical rules:
+- Transcribe every visible menu item and its nearby printed price.
+- Handwritten or temporary markings may indicate the item was sold out or unavailable only on the day the photo was taken. These markings can be blue X marks, red strike-throughs, circles, stickers, pen marks, or other manual annotations. DO NOT remove the printed menu item because of these markings. Still extract the printed item name and printed price.
+- Use the price printed immediately next to the item name. Do not infer or adjust prices.
+- Prices are usually shown as $230, $300, $430, etc. Return only the digits, without "$" and without ".00".
+- Keep Chinese item names exactly as shown. Do not translate.
+- Ignore weight, doneness, origin, checkboxes, descriptions, and availability marks.
+- Ignore UberEats/Foodpanda product cards, food photos, storefront photos, logos, and single-dish pictures; they are not complete menus.
+- Do not invent items that are not visible.
+- If fewer than 8 readable menu items are visible, return {{"menu_items":[]}}.
+- If an item name is visible but the price cannot be read, use "價格未標示".
+- For wide two-page menus, scan left-to-right and top-to-bottom across the entire image.
+"""
+
+    for idx, candidate in enumerate(candidates[:3], start=1):
+        image_url = candidate["url"]
+        if "encrypted-tbn" in image_url:
+            large_url = await open_google_image_preview(page, candidate)
+            if not large_url or "encrypted-tbn" in large_url:
+                print(f"  [Vision] 第 {idx} 張仍是 Google 縮圖，略過")
+                continue
+            image_url = large_url
+
+        print(f"  [Vision] 嘗試解析第 {idx} 張菜單圖片: {image_url[:120]}")
+        try:
+            response = vision_chat(prompt, image_url=image_url, timeout=180.0)
+            parsed = _extract_json_object(response)
+            if not isinstance(parsed, dict):
+                print("  [Vision] 回覆不是 JSON，跳過")
+                continue
+            items = _normalize_vision_menu_items(parsed.get("menu_items"))
+            if items:
+                items = verify_menu_items_with_vision(vision_chat, prompt, image_url, restaurant_name, items)
+                if is_usable_menu_result(items):
+                    print(f"  [Vision] 成功解析 {len(items)} 道菜")
+                    return Restaurant(name=restaurant_name, menu_items=items)
+                print(
+                    f"  [Vision] 只解析到 {len(items)} 道菜，低於 {MIN_VISION_MENU_ITEMS} 項門檻，略過"
+                )
+                continue
+            print("  [Vision] JSON 中沒有有效菜單項目，跳過")
+        except Exception as e:
+            print(f"  [Vision] 圖片解析失敗: {e}")
+
+    return Restaurant(name=restaurant_name, menu_items=[])
+
 async def crawl_google_menu(restaurant_name: str) -> Restaurant:
     """【主流程】全自動爬取 Google 餐廳菜單"""
     
@@ -389,6 +844,7 @@ async def crawl_google_menu(restaurant_name: str) -> Restaurant:
                     return None
             
             await wait_with_feedback(page, Config.WAIT_PAGE_LOAD, "等待搜尋結果完全載入...")
+            await stop_if_google_verification(page)
             
             # 驗證是否在正確的頁面
             current_url = page.url
@@ -405,17 +861,19 @@ async def crawl_google_menu(restaurant_name: str) -> Restaurant:
             click_success = await find_and_click_menu_button(page)
             
             # ================================================================
-            # Phase 4: 錯誤處理 - 手動輔助模式
+            # Phase 4: 沒有 Google 菜單按鈕時改走圖片備援
             # ================================================================
             if not click_success:
                 print("\n" + "="*70)
-                print("[WARNING] 自動化失敗，切換至【手動輔助模式】")
+                print("[WARNING] 找不到 Google 菜單按鈕，改從搜尋結果找菜單圖片")
                 print("="*70)
-                print("請在瀏覽器中手動執行以下操作：")
-                print("  1. 確認是否顯示餐廳資訊卡（右側）")
-                print("  2. 手動點擊「菜單」標籤")
-                print("  3. 完成後按 Enter 繼續抓取")
-                print("="*70)
+                image_result = await parse_menu_from_images(page, restaurant_name)
+                if image_result.menu_items:
+                    return image_result
+                if not Config.ENABLE_MANUAL_ASSIST:
+                    return image_result
+                print("圖片備援也失敗，切換至【手動輔助模式】")
+                print("請在瀏覽器中手動點擊「菜單」標籤，完成後按 Enter 繼續抓取")
                 input("\n按 Enter 繼續...")
             
             # 檢查菜單是否載入
@@ -425,15 +883,26 @@ async def crawl_google_menu(restaurant_name: str) -> Restaurant:
                 print("\n" + "="*70)
                 print("[ERROR] 最終檢查失敗：無法偵測到菜單內容")
                 print("="*70)
-                return Restaurant(name=restaurant_name, menu_items=[])
+                print("[Fallback] 改從 Google 搜尋結果尋找菜單圖片")
+                return await parse_menu_from_images(page, restaurant_name)
             
             # ================================================================
             # Phase 3: 資料抓取
             # ================================================================
             restaurant = await extract_menu_data(page, restaurant_name)
-            
+            if not restaurant.menu_items:
+                print("[Fallback] 文字菜單抽取為空，改從 Google 搜尋結果尋找菜單圖片")
+                return await parse_menu_from_images(page, restaurant_name)
+
             return restaurant
         
+        except GoogleVerificationRequired as e:
+            print(f"\n[Google Verification] {e}")
+            return Restaurant(
+                name=restaurant_name,
+                menu_items=[],
+                error="google_verification_required",
+            )
         except Exception as e:
             print(f"\n[ERROR] 爬蟲執行失敗: {e}")
             import traceback

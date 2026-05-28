@@ -159,7 +159,9 @@ def load_latest_crawled_menu() -> Optional[Menu]:
 RESTAURANT_MENUS: Dict[str, Menu] = {}
 ACTIVE_RESTAURANT: Optional[str] = None
 
-# 1️ 先載入預設菜單 (menu.json - 大肥鵝)
+DEFAULT_RESTAURANT_NAME = os.getenv("DEFAULT_RESTAURANT_NAME", "預設餐廳")
+
+# 1️ 先載入預設菜單 (menu.json)
 if MENU_PATH and os.path.exists(MENU_PATH):
     try:
         with open(MENU_PATH, "r", encoding="utf-8") as f:
@@ -168,10 +170,10 @@ if MENU_PATH and os.path.exists(MENU_PATH):
         # 判斷是舊格式還是新格式
         if "categories" in default_menu_data:
             # 舊格式：轉換成新格式
-            RESTAURANT_MENUS["大肥鵝"] = {
+            RESTAURANT_MENUS[DEFAULT_RESTAURANT_NAME] = {
                 "restaurants": {
-                    "大肥鵝": {
-                        "name": "大肥鵝",
+                    DEFAULT_RESTAURANT_NAME: {
+                        "name": DEFAULT_RESTAURANT_NAME,
                         "categories": {
                             cat["name"]: {
                                 "items": cat.get("items", [])
@@ -181,7 +183,7 @@ if MENU_PATH and os.path.exists(MENU_PATH):
                     }
                 }
             }
-            print(f" 載入預設餐廳：大肥鵝")
+            print(f" 載入預設餐廳：{DEFAULT_RESTAURANT_NAME}")
         elif "restaurants" in default_menu_data:
             # 新格式：直接使用
             for rest_name in default_menu_data["restaurants"]:
@@ -235,11 +237,26 @@ if RESTAURANT_MENUS and menu_files:  # 確保 menu_files 不是空列表
 else:
     # 使用預設 menu
     if MENU_PATH and os.path.exists(MENU_PATH):
-        ACTIVE_RESTAURANT = "預設餐廳"
-        RESTAURANT_MENUS["預設餐廳"] = menu
+        ACTIVE_RESTAURANT = DEFAULT_RESTAURANT_NAME
+        RESTAURANT_MENUS[DEFAULT_RESTAURANT_NAME] = menu
 
 # 簡單 session 記憶
 SESSIONS: Dict[str, Dict[str, object]] = {}
+
+
+def _crawler_error_message(restaurant) -> Optional[str]:
+    if not restaurant:
+        return None
+    if getattr(restaurant, "error", "") == "google_verification_required":
+        return "Google 要求人機驗證，請在自動開啟的 Chrome 完成驗證後，重新爬取同一間餐廳。"
+    return None
+
+
+def _crawler_no_menu_message(restaurant_name: str) -> str:
+    return (
+        f"找不到足夠菜單資料：{restaurant_name} 的文字菜單、Google 圖片搜尋結果截圖與候選圖片解析，"
+        "都沒有達到 8 項以上的可用菜單門檻。"
+    )
 
 
 def _log_chat(session_id: str, user_text: str, reply: str, prefs: Preferences) -> None:
@@ -418,6 +435,13 @@ async def api_crawl_foodpanda(req: FoodpandaReq):
         loop = asyncio.get_event_loop()
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             restaurant = await loop.run_in_executor(pool, _run_crawler, restaurant_name)
+
+        crawler_error = _crawler_error_message(restaurant)
+        if crawler_error:
+            return FoodpandaResp(
+                success=False,
+                message=crawler_error
+            )
         
         if restaurant and restaurant.menu_items:
             print(f"[爬蟲] 成功爬取 {len(restaurant.menu_items)} 道菜")
@@ -502,7 +526,7 @@ async def api_crawl_foodpanda(req: FoodpandaReq):
             print(f"[爬蟲] 爬取失敗：未取得菜單資料")
             return FoodpandaResp(
                 success=False,
-                message=f" 爬取失敗：未取得菜單資料\n\n 可能原因：\n1. 沒有手動點擊菜單頁面\n2. 餐廳沒有在 Google Maps 上架菜單\n3. 餐廳名稱不正確：「{restaurant_name}」\n\n 提示：\n確保在 Chrome 彈出後，手動點擊「菜單」標籤"
+                message=_crawler_no_menu_message(restaurant_name)
             )
     
     except Exception as e:
@@ -639,6 +663,13 @@ async def update_menu(req: UpdateMenuReq):
         loop = asyncio.get_event_loop()
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             restaurant = await loop.run_in_executor(pool, _run_crawler, restaurant_name)
+
+        crawler_error = _crawler_error_message(restaurant)
+        if crawler_error:
+            return UpdateMenuResp(
+                status="error",
+                message=crawler_error
+            )
         
         if restaurant and restaurant.menu_items:
             print(f"[爬蟲] 成功爬取 {len(restaurant.menu_items)} 道菜")
@@ -713,7 +744,7 @@ async def update_menu(req: UpdateMenuReq):
             print(f"[爬蟲] 爬取失敗：未取得菜單資料")
             return UpdateMenuResp(
                 status="error",
-                message="爬取失敗：未取得菜單資料，請確認是否手動點擊了菜單頁面"
+                message=_crawler_no_menu_message(restaurant_name)
             )
             
     except Exception as e:

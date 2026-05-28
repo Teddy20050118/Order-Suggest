@@ -1,13 +1,49 @@
 
 import os, json, re, shutil, subprocess, random, time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib import request, error
 
 # 修正導入路徑（src 目錄下要用 db.db_client）
 
 
 #從環境變數讀取設定
-DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3:12b")
+def _load_env_file() -> None:
+    """Load simple KEY=value or PowerShell-style $env:KEY = "value" lines."""
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if not env_path.exists():
+        return
+    try:
+        for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("$env:"):
+                line = line[len("$env:"):]
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and value and (key not in os.environ or not os.environ.get(key)):
+                os.environ[key] = value
+    except Exception:
+        pass
+
+
+_load_env_file()
+
+DEFAULT_MODEL = (
+    os.environ.get("API_MODEL")
+    or os.environ.get("AI_MODEL")
+    or os.environ.get("MODEL")
+    or os.environ.get("OLLAMA_MODEL")
+    or "gemma3:12b"
+)
 OLLAMA_BIN = os.getenv("OLLAMA_BIN", "ollama")
+API_BASE_URL = os.getenv("API_BASE_URL", "").rstrip("/")
+API_KEY = os.getenv("API_KEY", "")
+VISION_MODEL = os.getenv("VISION_MODEL", "llama4scout")
 
 def _cli_available() -> bool:
     return shutil.which(OLLAMA_BIN) is not None #檢查路徑是否找到執行檔
@@ -84,10 +120,75 @@ def _build_prompt_from_messages(messages: List[Dict[str, str]]) -> str:
     parts.append("助理:")
     return "\n".join(parts)
 #把多輪對話messages轉成一段提示字串，再用CLI方式呼叫Ollama
+def _api_chat(messages: List[Dict[str, str]], model: str, timeout: float = 180.0) -> str:
+    url = API_BASE_URL
+    if not url.endswith("/chat/completions"):
+        url = f"{url}/chat/completions"
+
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": float(os.getenv("API_TEMPERATURE", "0.7")),
+    }
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = request.Request(
+        url,
+        data=data,
+        headers={
+            "Authorization": f"Bearer {API_KEY}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8")
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"model API request failed: HTTP {exc.code} {detail}") from exc
+
+    obj = json.loads(body)
+    choices = obj.get("choices") or []
+    if not choices:
+        raise RuntimeError(f"model API returned no choices: {body[:500]}")
+    message = choices[0].get("message") or {}
+    content = message.get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError(f"model API returned empty content: {body[:500]}")
+    return content.strip()
+
+
 def chat(messages: List[Dict[str, str]], model: Optional[str] = None, timeout: float = 180.0) -> str:
     mdl = model or DEFAULT_MODEL
+    if API_BASE_URL and API_KEY:
+        api_model = os.environ.get("API_MODEL") or os.environ.get("AI_MODEL") or os.environ.get("MODEL") or mdl
+        return _api_chat(messages, api_model, timeout=timeout)
     prompt = _build_prompt_from_messages(messages)
     return _cli_run(["run", mdl], input_text=prompt, timeout=timeout)
+
+
+def vision_chat(
+    prompt: str,
+    image_url: str,
+    model: Optional[str] = None,
+    timeout: float = 180.0,
+) -> str:
+    """Call an OpenAI-compatible vision model with one image URL."""
+    if not API_BASE_URL or not API_KEY:
+        raise RuntimeError("vision model requires API_BASE_URL and API_KEY")
+
+    mdl = model or VISION_MODEL
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": image_url}},
+            ],
+        }
+    ]
+    return _api_chat(messages, mdl, timeout=timeout)  # type: ignore[arg-type]
 
 def _extract_json(text: str) -> Any:
     try:
@@ -232,7 +333,7 @@ def recommend(menu: Dict[str, Any], prefs: Optional[Dict[str, Any]] = None, top_
         """ 使用 LLM 批次智能分類菜品（一次處理多個，提升效率）"""
         try:
             # 使用更小更快的模型
-            model = os.environ.get("CLASSIFY_MODEL", "gemma3:12b")
+            model = os.environ.get("CLASSIFY_MODEL") or DEFAULT_MODEL
             
             # 建立菜品列表字串
             items_text = "\n".join([f"{i+1}. {item.get('name', '')}" for i, item in enumerate(items)])
@@ -280,7 +381,7 @@ side
         name = str(item.get("name", ""))
         
         try:
-            model = os.environ.get("CLASSIFY_MODEL", "gemma3:12b")
+            model = os.environ.get("CLASSIFY_MODEL") or DEFAULT_MODEL
             
             prompt = f"""請分類這道菜品屬於哪一類，只回答一個代碼：
 - main: 主食/主餐（漢堡、套餐、吐司、貝果、米飯、麵食等）
